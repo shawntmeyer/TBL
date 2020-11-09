@@ -1,8 +1,21 @@
-$WindowsVersion = "2004"
-$Office365Install = $true
-$BuildDir = "c:\BuildDir"
-$StorageAccountResourceGroup = "bsd-imaging-rg"
-$StorageAccountName = "bsdimagesources"
+param (
+        [Parameter(Mandatory=$false)]
+        [String]
+        $WindowsVersion = '2004',
+        [Parameter(Mandatory=$false)]
+        [Boolean]
+        $Office365Install = $true,
+        [Parameter(Mandatory=$false)]
+        [String]
+        $BuildDir="$env:SystemDrive\BuildArtifacts",
+        [Parameter(Mandatatory=$false)]
+        [String]
+        $CustomizationSourceStorageAccountRG = "BSD-IMAGING-RG",
+        [Parameter(Mandatatory=$false)]
+        [String]
+        $CustomizationSourceStorageAccountName = "bsdimagesources"
+)
+
 $ScriptName = $MyInvocation.MyCommand.Name
 
 Function Get-AzStorageFile {
@@ -13,7 +26,7 @@ Function Get-AzStorageFile {
         $ResourceGroupName,
         [Parameter(Mandatory=$true)]
         [String]
-        $StorageAccountName,
+        $CustomizationSourceStorageName,
         [Parameter(Mandatory=$true)]
         [String]
         $ShareName,
@@ -28,7 +41,7 @@ Function Get-AzStorageFile {
     Write-Output "Download file contents from storage container."    
 
     ## Get the storage account
-    $storageAccount=Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $storageAccountName    
+    $storageAccount=Get-AzStorageAccount -ResourceGroupName $ResourceGroupName -Name $CustomizationSourceStorageName    
 
     Get-AzStorageFileContent -Context $storageAccount.Context -ShareName $shareName -Path $FilePath -Destination $DestinationFile
 }
@@ -59,7 +72,24 @@ Function Update-ServiceConfigurationJSON {
 }
 
 Write-Output "Running '$ScriptName'"
+If ($CustomizationSourceStorageAccountRG -and $CustomizationSourceStorageAccountName) {
+    Write-Log "Verifying availability of Customization Sources storage Account."
+    $storageAccount = Get-AzStorageAccount `
+        -ResourceGroupName $ResourceGroupName `
+        -Name $CustomizationSourceStorageName `
+        -ErrorAction SilentlyContinue
+    If ($storageAccount) {
+        Write-Log "Storage Account Verified."
+        $sactx = $storageAccount.Context
+    }
+}
+
+
 Write-Output "Creating '$BuildDir'"
+
+If (-not (Get-Module -Name Az -ErrorAction SilentlyContinue)) {
+    Install-Module Az -AllowClobber -Force
+}
 $null = New-Item -Path "$BuildDir" -ItemType Directory -Force -ErrorAction SilentlyContinue
 Write-Output "Downloading the WVD Image Prep Script from the 'http://www.github.com/shawntmeyer/wvd' repo."
 $PrepWVDImageURL = "https://github.com/shawntmeyer/WVD/archive/master.zip"
@@ -74,35 +104,63 @@ Write-Output "Now calling 'Prepare-WVDImage.ps1'"
 & "$ScriptPath\Prepare-WVDImage.ps1" -Office365Install $Office365Install
 Write-Output "Finished 'Prepare-WVDImage.ps1'."
 
-#region ICAD Net Install
-$ShareName = "software"
-$ICADNetSourcePath = "hexagon\IPS0042_INetViewer_9.4.50158.zip"
-$ICADNetZip = "$BuildDir\InetViewer.zip"
-Get-AzstorageFile `
-    -ResourceGroupName $StorageAccountResourceGroup `
-    -StorageAccountName $StorageAccountName `
-    -ShareName $ShareName `
-    -FilePath $ICADNetSourcePath `
-    -DestinationFile $ICADNetZip
-$ICADPath = "$BuildDir\ICADNet"
-Expand-Archive -Path $ICADNetZip -DestinationPath $ICADPath
-Write-Output "Installing ICAD Net."
-Start-Process -FilePath "$ICADPath\Setup.exe" -ArgumentList "/s ICAD_NET /n ACCEPT_EULA=1 ORASELECTED=0 MSSSELECTED=1" -wait
-#end region
-
 #region SQL Native Client
 $ShareName = "software"
 $SqlSourcePath = "hexagon\sqlncli_64.msi"
 $sqlCltPath = "$BuildDir\SqlClt\sqlncli_x64.msi"
 Get-AzstorageFile `
-    -ResourceGroupName $StorageAccountResourceGroup `
-    -StorageAccountName $StorageAccountName `
+    -ResourceGroupName $CustomizationSourceStorageAccountRG `
+    -StorageAccountName $CustomizationSourceStorageName `
     -ShareName $ShareName `
     -FilePath $SQLSourcePath `
     -DestinationFile $SQLCltPath
 Start-Process -FilePath 'msiexec.exe' -ArgumentList "/i `"$SQLCltPath`" /qn IACCEPTSQLNCLILICENSETERMS=YES" -wait
-
 #endregion
+
+#region ICAD Net Install
+$Share = "software"
+$SourceFile = "hexagon\IPS0042_INetViewer_9.4.50158.zip"
+$DestinationFile = "$BuildDir\InetViewer.zip"
+Get-AzStorageFileContent `
+    -Context $sactx `
+    -ShareName $Share `
+    -Path $SourceFile `
+    -Destination $DestinationFile
+$ExtractPath = "$BuildDir\ICADNet"
+Expand-Archive -Path $DestinationFile -DestinationPath $ExtractPath
+Write-Output "Installing ICAD Net."
+Start-Process -FilePath "$ExtractPath\Setup.exe" -ArgumentList "/s ICAD_NET /n ACCEPT_EULA=1 ORASELECTED=0 MSSSELECTED=1" -wait
+#end region
+
+#region Dispatcher
+$Share = "software"
+$SourceFile = "hexagon\IPS0045_INetDispatcher_9.4.50158.zip"
+$DestinationFile = "$BuildDir\InetDispatcher.zip"
+Get-AzStorageFileContent `
+    -Context $sactx `
+    -ShareName $Share `
+    -Path $SourceFile `
+    -Destination $DestinationFile
+$ExtractPath = "$BuildDir\ICADDispatcher"
+Expand-Archive -Path $DestinationFile -DestinationPath $ExtractPath
+Write-Output "Installing ICAD Dispatcher."
+Start-Process -FilePath "$ExtractPath\Setup.exe" -ArgumentList "/s Dispatcher /ni ACCEPT_EULA=1" -wait
+#end region
+
+#region Informer
+$Share = "software"
+$SourceFile = "hexagon\IPS0004_Informer__9.4.50075.zip"
+$DestinationFile = "$BuildDir\Informer.zip"
+Get-AzStorageFileContent `
+    -Context $sactx `
+    -ShareName $Share `
+    -Path $SourceFile `
+    -Destination $DestinationFile
+$ExtractPath = "$BuildDir\Informer"
+Expand-Archive -Path $DestinationFile -DestinationPath $ExtractPath
+Write-Output "Installing Informer."
+Start-Process -FilePath "$ExtractPath\Setup.exe" -ArgumentList "/s InformerClient /ni ACCEPT_EULA=1" -wait
+#end region
 
 # Download Virtual Desktop Optimization Tool from the Virtual Desktop Team GitHub Repo
 $WVDOptimizeURL = 'https://github.com/The-Virtual-Desktop-Team/Virtual-Desktop-Optimization-Tool/archive/master.zip'

@@ -11,8 +11,13 @@ $currentAzContext = Get-AzContext
 $imageResourceGroup="RG-AzureImageBuilder"
 # location (see possible locations in main docs)
 $location="EastUS"
+# Image Source Storage Account
+$StorageAccountName = 'bsdimagesources'
 # your subscription, this will get your current subscription
 $subscriptionID=$currentAzContext.Subscription.Id
+# setup role def names, these need to be unique
+$imageRoleDefName="Azure Image Builder Custom Role"
+$IdentityName="AIBUserIdentity"
 # image template name
 $imageTemplateName="Win10-EVD-20H2"
 # distribution properties object name (runOutput), i.e. this gives you the properties of the managed image on completion
@@ -26,11 +31,6 @@ If (!(Get-AzResourceGroup -Name $imageResourceGroup -ErrorAction SilentlyContinu
 #endregion
 
 #region Step 2: Create User Assigned Identity
-
-# setup role def names, these need to be unique
-
-$imageRoleDefName="Azure Image Builder Custom Role"
-$IdentityName="AIBUserIdentity"
 
 ## Add AZ PS module to support AzUserAssignedIdentity
 If (!(Get-Module -name Az.ManagedServiceIdentity -ErrorAction SilentlyContinue)) {
@@ -88,7 +88,7 @@ If (!(Get-AzRoleAssignment -RoleDefinitionName $imageRoleDefName -objectID $Iden
 Else {
     Write-Output 'Role Assignment Found.'
 }
-
+New-AzRoleAssignment -ObjectId $IdentityNamePrincipalId -RoleDefinitionName "Storage File Data SMB Share Reader" -scope "/subscriptions/$subscriptionID/resourceGroups/$imageResourceGroup/providers/Microsoft.Storage/storageAccounts/$storageaccountname"
 #region Step 3: Create the Shared Image Gallery and Image Definition
 
 $sigGalleryName= "WVDSharedImages"
